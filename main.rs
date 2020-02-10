@@ -8,6 +8,16 @@ fn main() {
 
     test(old::SipHasher128::new_with_keys(key, key), "old");
     test(new::SipHasher128::new_with_keys(key, key), "new");
+
+
+    test_bytes(old::SipHasher128::new_with_keys(key, key), "old", b"abc");
+    test_bytes(new::SipHasher128::new_with_keys(key, key), "new", b"abc");
+
+    test_bytes(old::SipHasher128::new_with_keys(key, key), "old", b"abcedwrt");
+    test_bytes(new::SipHasher128::new_with_keys(key, key), "new", b"abcedwrt");
+
+    test_bytes(old::SipHasher128::new_with_keys(key, key), "old", b"abcedwrtasd");
+    test_bytes(new::SipHasher128::new_with_keys(key, key), "new", b"abcedwrtasd");
 }
 
 
@@ -22,6 +32,14 @@ fn test<H: Hasher + Hasher128>(mut hasher: H, label: &str) {
     println!("{}: {:x} {:x}", label, a, b);
 }
 
+fn test_bytes<H: Hasher + Hasher128>(mut hasher: H, label: &str, bytes: &[u8]) {
+
+    hasher.write(bytes);
+
+    let (a, b) = hasher.finish128();
+
+    println!("{}: {:x} {:x}", label, a, b);
+}
 
 trait Hasher128 {
     fn finish128(self) -> (u64, u64);
@@ -98,27 +116,24 @@ mod old {
 
 
 
-    /// Loads an u64 using up to 7 bytes of a byte slice.
-    ///
-    /// Unsafe because: unchecked indexing at start..start+len
+    /// Loads up to 7 bytes from a byte-slice into a u64.
     #[inline]
-    unsafe fn u8to64_le(buf: &[u8], start: usize, len: usize) -> u64 {
-        debug_assert!(len < 8);
-        let mut i = 0; // current byte index (from LSB) in the output u64
-        let mut out = 0;
-        if i + 3 < len {
-            out = u64::from(load_int_le!(buf, start + i, u32));
-            i += 4;
+    fn u8to64_le(buf: &[u8], start: usize, len: usize) -> u64 {
+        assert!(len < 8 && start + len <= buf.len());
+        let mut out = 0u64;
+
+        unsafe {
+            let out_ptr = &mut out as *mut _ as *mut u8;
+            ptr::copy_nonoverlapping(buf.as_ptr().offset(start as isize), out_ptr, len);
         }
-        if i + 1 < len {
-            out |= u64::from(load_int_le!(buf, start + i, u16)) << (i * 8);
-            i += 2
+
+        #[cfg(target_endian = "big")]
+        {
+            // If this is a big endian system we swap bytes, so that the first
+            // byte ends up in the lowest order byte, like SipHash expects.
+            out = out.swap_bytes();
         }
-        if i < len {
-            out |= u64::from(*buf.get_unchecked(start + i)) << (i * 8);
-            i += 1;
-        }
-        debug_assert_eq!(i, len);
+
         out
     }
 
@@ -166,7 +181,7 @@ mod old {
             if fill == 8 {
                 self.tail = unsafe { load_int_le!(msg, 0, u64) };
             } else {
-                self.tail |= unsafe { u8to64_le(msg, 0, fill) } << (8 * self.ntail);
+                self.tail |= u8to64_le(msg, 0, fill) << (8 * self.ntail);
                 if length < needed {
                     self.ntail += length;
                     return;
@@ -178,7 +193,7 @@ mod old {
 
             // Buffered tail is now flushed, process new input.
             self.ntail = length - needed;
-            self.tail = unsafe { u8to64_le(msg, needed, self.ntail) };
+            self.tail = u8to64_le(msg, needed, self.ntail);
         }
 
         #[inline(always)]
@@ -269,7 +284,7 @@ mod old {
 
             if self.ntail != 0 {
                 needed = 8 - self.ntail;
-                self.tail |= unsafe { u8to64_le(msg, 0, cmp::min(length, needed)) } << (8 * self.ntail);
+                self.tail |= u8to64_le(msg, 0, cmp::min(length, needed)) << (8 * self.ntail);
                 if length < needed {
                     self.ntail += length;
                     return;
@@ -296,7 +311,7 @@ mod old {
                 i += 8;
             }
 
-            self.tail = unsafe { u8to64_le(msg, i, left) };
+            self.tail = u8to64_le(msg, i, left);
             self.ntail = left;
         }
 
@@ -356,27 +371,48 @@ mod new {
         v3: u64,
     }
 
-    /// Loads an u64 using up to 7 bytes of a byte slice.
-    ///
-    /// Unsafe because: unchecked indexing at start..start+len
+    // /// Loads an u64 using up to 7 bytes of a byte slice.
+    // ///
+    // /// Unsafe because: unchecked indexing at start..start+len
+    // #[inline]
+    // unsafe fn u8to64_le(buf: &[u8], start: usize, len: usize) -> u64 {
+    //     debug_assert!(len < 8);
+    //     let mut i = 0; // current byte index (from LSB) in the output u64
+    //     let mut out = 0;
+    //     if i + 3 < len {
+    //         out = u64::from(load_int_le!(buf, start + i, u32));
+    //         i += 4;
+    //     }
+    //     if i + 1 < len {
+    //         out |= u64::from(load_int_le!(buf, start + i, u16)) << (i * 8);
+    //         i += 2
+    //     }
+    //     if i < len {
+    //         out |= u64::from(*buf.get_unchecked(start + i)) << (i * 8);
+    //         i += 1;
+    //     }
+    //     debug_assert_eq!(i, len);
+    //     out
+    // }
+
+    /// Loads up to 7 bytes from a byte-slice into a u64.
     #[inline]
-    unsafe fn u8to64_le(buf: &[u8], start: usize, len: usize) -> u64 {
-        debug_assert!(len < 8);
-        let mut i = 0; // current byte index (from LSB) in the output u64
-        let mut out = 0;
-        if i + 3 < len {
-            out = u64::from(load_int_le!(buf, start + i, u32));
-            i += 4;
+    fn u8to64_le(buf: &[u8], start: usize, len: usize) -> u64 {
+        assert!(len < 8 && start + len <= buf.len());
+        let mut out = 0u64;
+
+        unsafe {
+            let out_ptr = &mut out as *mut _ as *mut u8;
+            ptr::copy_nonoverlapping(buf.as_ptr().offset(start as isize), out_ptr, len);
         }
-        if i + 1 < len {
-            out |= u64::from(load_int_le!(buf, start + i, u16)) << (i * 8);
-            i += 2
+
+        #[cfg(target_endian = "big")]
+        {
+            // If this is a big endian system we swap bytes, so that the first
+            // byte ends up in the lowest order byte, like SipHash expects.
+            out = out.swap_bytes();
         }
-        if i < len {
-            out |= u64::from(*buf.get_unchecked(start + i)) << (i * 8);
-            i += 1;
-        }
-        debug_assert_eq!(i, len);
+
         out
     }
 
@@ -562,7 +598,7 @@ mod new {
 
             if self.ntail != 0 {
                 needed = 8 - self.ntail;
-                self.tail |= unsafe { u8to64_le(msg, 0, cmp::min(length, needed)) } << (8 * self.ntail);
+                self.tail |= u8to64_le(msg, 0, cmp::min(length, needed)) << (8 * self.ntail);
                 if length < needed {
                     self.ntail += length;
                     return;
@@ -589,7 +625,7 @@ mod new {
                 i += 8;
             }
 
-            self.tail = unsafe { u8to64_le(msg, i, left) };
+            self.tail = u8to64_le(msg, i, left);
             self.ntail = left;
         }
 
