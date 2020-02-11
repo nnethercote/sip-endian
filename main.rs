@@ -169,9 +169,11 @@ mod old {
                 self.tail |= unsafe { u8to64_le(msg, 0, fill) } << (8 * self.ntail);
                 if length < needed {
                     self.ntail += length;
+                    eprintln!("old early  : 0x{:x}, {}", self.tail, self.ntail);
                     return;
                 }
             }
+            eprintln!("old process: 0x{:x}, {}", self.tail, self.ntail);
             self.state.v3 ^= self.tail;
             Sip24Rounds::c_rounds(&mut self.state);
             self.state.v0 ^= self.tail;
@@ -179,6 +181,7 @@ mod old {
             // Buffered tail is now flushed, process new input.
             self.ntail = length - needed;
             self.tail = unsafe { u8to64_le(msg, needed, self.ntail) };
+            eprintln!("old spill  : 0x{:x}, {}", self.tail, self.ntail);
         }
 
         #[inline(always)]
@@ -461,10 +464,12 @@ mod new {
             self.tail |= x << (8 * self.ntail);
             if size < needed {
                 self.ntail += size;
+                eprintln!("new early  : 0x{:x}, {}", self.tail, self.ntail);
                 return;
             }
 
             // `self.tail` is full, process it.
+            eprintln!("new process: 0x{:x}, {}", self.tail, self.ntail);
             self.state.v3 ^= self.tail;
             Sip24Rounds::c_rounds(&mut self.state);
             self.state.v0 ^= self.tail;
@@ -478,6 +483,7 @@ mod new {
             // complains about.
             self.ntail = size - needed;
             self.tail = if needed < 8 { x >> (8 * needed) } else { 0 };
+            eprintln!("new spill  : 0x{:x}, {}", self.tail, self.ntail);
         }
     }
 
